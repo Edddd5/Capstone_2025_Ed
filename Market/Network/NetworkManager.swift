@@ -4,12 +4,7 @@
 //
 //  Created by 장동혁 on 2/6/25.
 //
-//
-//  NetworkManager.swift
-//  Market
-//
-//  Created by 장동혁 on 2/6/25.
-//
+
 import Foundation
 
 class NetworkManager {
@@ -17,6 +12,245 @@ class NetworkManager {
     private let baseURL = "http://localhost:8080"
     
     private init() {}
+    
+    // MARK: - Post API Methods
+    
+    // 게시물 목록 가져오기
+    func fetchPosts(page: Int, size: Int, completion: @escaping (Result<PageResponse<Post>, Error>) -> Void) {
+        let urlString = "\(baseURL)/api/posts?page=\(page)&size=\(size)"
+        guard let url = URL(string: urlString) else {
+            completion(.failure(NetworkError.invalidURL))
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        
+        // 인증 토큰 추가
+        if let token = UserDefaults.standard.string(forKey: "userToken") {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                print("Error fetching posts: \(error.localizedDescription)")
+                completion(.failure(error))
+                return
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NetworkError.invalidResponse))
+                return
+            }
+            
+            // 인증 오류 처리
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                completion(.failure(NetworkError.authenticationRequired))
+                return
+            }
+            
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(NetworkError.serverError(httpResponse.statusCode)))
+                return
+            }
+            
+            guard let data = data else {
+                completion(.failure(NetworkError.noData))
+                return
+            }
+            
+            // HTML 응답인지 확인 (로그인 페이지로 리디렉션된 경우)
+            if let contentType = httpResponse.allHeaderFields["Content-Type"] as? String,
+               contentType.contains("text/html") {
+                completion(.failure(NetworkError.authenticationRequired))
+                return
+            }
+            
+            do {
+                // 디버깅용 응답 출력
+                if let responseString = String(data: data, encoding: .utf8) {
+                    print("Response data (first 200 chars): \(responseString.prefix(200))")
+                }
+                
+                let decoder = JSONDecoder()
+                decoder.keyDecodingStrategy = .useDefaultKeys
+                decoder.dateDecodingStrategy = .iso8601
+                
+                let pageResponse = try decoder.decode(PageResponse<Post>.self, from: data)
+                completion(.success(pageResponse))
+            } catch {
+                print("Error decoding response: \(error)")
+                
+                // 디코딩 오류 상세 정보
+                if let decodingError = error as? DecodingError {
+                    switch decodingError {
+                    case .keyNotFound(let key, let context):
+                        print("Key not found: \(key), context: \(context.debugDescription)")
+                    case .valueNotFound(let type, let context):
+                        print("Value not found: \(type), context: \(context.debugDescription)")
+                    case .typeMismatch(let type, let context):
+                        print("Type mismatch: \(type), context: \(context.debugDescription)")
+                    case .dataCorrupted(let context):
+                        print("Data corrupted: \(context.debugDescription)")
+                    @unknown default:
+                        print("Unknown decoding error")
+                    }
+                }
+                
+                completion(.failure(error))
+            }
+        }
+        
+        task.resume()
+    }
+    
+    // 단일 게시물 조회
+    func fetchPost(id: Int, completion: @escaping (Result<Post, Error>) -> Void) {
+        let urlString = "\(baseURL)/api/post/\(id)"
+        guard let url = URL(string: urlString) else {
+            completion(.failure(NetworkError.invalidURL))
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        
+        // 인증 토큰 추가
+        if let token = UserDefaults.standard.string(forKey: "userToken") {
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NetworkError.invalidResponse))
+                return
+            }
+            
+            // 인증 오류 처리
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                completion(.failure(NetworkError.authenticationRequired))
+                return
+            }
+            
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(NetworkError.serverError(httpResponse.statusCode)))
+                return
+            }
+            
+            guard let data = data else {
+                completion(.failure(NetworkError.noData))
+                return
+            }
+            
+            do {
+                let decoder = JSONDecoder()
+                let post = try decoder.decode(Post.self, from: data)
+                completion(.success(post))
+            } catch {
+                print("Error decoding post: \(error)")
+                completion(.failure(error))
+            }
+        }
+        
+        task.resume()
+    }
+    
+    // 게시물 작성
+    func createPost(title: String, content: String, price: Int, place: String?, images: [Data]?, completion: @escaping (Result<Post, Error>) -> Void) {
+        let urlString = "\(baseURL)/api/post"
+        guard let url = URL(string: urlString) else {
+            completion(.failure(NetworkError.invalidURL))
+            return
+        }
+        
+        // 토큰 확인
+        guard let token = UserDefaults.standard.string(forKey: "userToken") else {
+            completion(.failure(NetworkError.authenticationRequired))
+            return
+        }
+        
+        // multipart/form-data 경계 문자열 생성
+        let boundary = UUID().uuidString
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        
+        var body = Data()
+        
+        // 텍스트 필드 추가
+        let textParams: [String: String] = [
+            "title": title,
+            "content": content,
+            "price": "\(price)",
+            "place": place ?? ""
+        ]
+        
+        for (key, value) in textParams {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(value)\r\n".data(using: .utf8)!)
+        }
+        
+        // 이미지 추가
+        if let images = images, !images.isEmpty {
+            for (index, imageData) in images.enumerated() {
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"images\"; filename=\"image\(index).jpg\"\r\n".data(using: .utf8)!)
+                body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+                body.append(imageData)
+                body.append("\r\n".data(using: .utf8)!)
+            }
+        }
+        
+        // 경계 종료
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        
+        request.httpBody = body
+        
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NetworkError.invalidResponse))
+                return
+            }
+            
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                completion(.failure(NetworkError.authenticationRequired))
+                return
+            }
+            
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(NetworkError.serverError(httpResponse.statusCode)))
+                return
+            }
+            
+            guard let data = data else {
+                completion(.failure(NetworkError.noData))
+                return
+            }
+            
+            do {
+                let decoder = JSONDecoder()
+                let post = try decoder.decode(Post.self, from: data)
+                completion(.success(post))
+            } catch {
+                completion(.failure(error))
+            }
+        }
+        
+        task.resume()
+    }
     
     // 회원정보 가져오기
     func getUserProfile(userId: Int, completion: @escaping (Result<UserDTO, Error>) -> Void) {
@@ -258,6 +492,9 @@ class NetworkManager {
                         UserDefaults.standard.set(userId, forKey: "userId")
                     }
                 }
+                
+                // 토큰 저장
+                UserDefaults.standard.set(token, forKey: "userToken")
                 
                 completion(.success(token))
                 return
@@ -503,19 +740,22 @@ class NetworkManager {
         case invalidResponse
         case serverError(Int)
         case invalidCredentials
+        case authenticationRequired
         
         var errorDescription: String? {
             switch self {
             case .invalidURL:
-                return "Invalid URL"
+                return "잘못된 URL입니다"
             case .noData:
-                return "No data received"
+                return "데이터를 받지 못했습니다"
             case .invalidResponse:
-                return "Invalid response from server"
+                return "서버로부터 올바르지 않은 응답을 받았습니다"
             case .serverError(let code):
-                return "Server error with code: \(code)"
+                return "서버 오류가 발생했습니다 (코드: \(code))"
             case .invalidCredentials:
                 return "이메일 또는 비밀번호가 일치하지 않습니다!"
+            case .authenticationRequired:
+                return "로그인이 필요합니다"
             }
         }
     }

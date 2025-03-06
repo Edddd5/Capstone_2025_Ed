@@ -87,6 +87,16 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
     private var userId: Int?
     private var isLoadingProfile = false
     
+    // 프로필 로드 여부 추적 - 앱 전역 상태로 변경
+    // 정적 프로퍼티로 전환하여 앱 라이프사이클 동안 유지
+    private static var hasLoadedProfile = false
+    
+    // 마지막 프로필 로드 시간 추적
+    private static var lastProfileLoadTime: Date?
+    
+    // 프로필 데이터
+    private static var cachedUserData: UserDTO?
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .white
@@ -94,8 +104,16 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
         setupViews()
         setupTabBar()
         setupImageTapGesture()
-        // 최초 로드
-        loadUserProfile()
+        
+        // 최초 로드 또는 캐시된 데이터 표시
+        if let cachedData = ProfileViewController.cachedUserData {
+            // 캐시된 데이터가 있으면 바로 표시
+            print("✅ 캐시된 프로필 데이터 사용")
+            updateProfileUI(with: cachedData)
+        } else {
+            // 캐시된 데이터가 없으면 로드
+            loadUserProfileIfNeeded()
+        }
     }
     
     // 프로필 이미지 변경
@@ -229,6 +247,31 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
         }
     }
     
+    // 필요한 경우에만 프로필 로드
+    private func loadUserProfileIfNeeded() {
+        // 프로필이 이미 로드되었고, 마지막 로드 후 30분이 경과하지 않았으면 스킵
+        if ProfileViewController.hasLoadedProfile,
+           let lastLoad = ProfileViewController.lastProfileLoadTime,
+           Date().timeIntervalSince(lastLoad) < 1800 { // 30분(1800초)
+            print("✅ 프로필 이미 로드됨, 로드 시간이 30분 이내임")
+            
+            // 캐시된 데이터가 있으면 사용
+            if let cachedData = ProfileViewController.cachedUserData {
+                updateProfileUI(with: cachedData)
+            }
+            return
+        }
+        
+        // 프로필 변경 플래그 확인
+        let needsRefresh = UserDefaults.standard.bool(forKey: "profileNeedsRefresh")
+        
+        if needsRefresh || !ProfileViewController.hasLoadedProfile {
+            // 새로고침 필요하거나 최초 로드인 경우
+            UserDefaults.standard.set(false, forKey: "profileNeedsRefresh")
+            loadUserProfile()
+        }
+    }
+    
     // 프로필 관리
     private func loadUserProfile() {
         // 이미 로딩 중이면 중복 호출 방지
@@ -284,6 +327,12 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
                     print("   - 닉네임: \(userDTO.nickname)")
                     print("   - 이메일: \(userDTO.email)")
                     
+                    // 캐시에 저장
+                    ProfileViewController.cachedUserData = userDTO
+                    
+                    // 로드 시간 기록
+                    ProfileViewController.lastProfileLoadTime = Date()
+                    
                     // UI 업데이트 전 현재 값 로깅
                     print("🔄 UI 업데이트 전:")
                     print("   - 현재 nameLabel: \(self.nameLabel.text ?? "nil")")
@@ -291,12 +340,13 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
                     
                     self.updateProfileUI(with: userDTO)
                     
+                    // 프로필 로드 완료 플래그 설정
+                    ProfileViewController.hasLoadedProfile = true
+                    
                     // UI 업데이트 검증
-                    DispatchQueue.main.async {
-                        print("✅ UI 업데이트 후:")
-                        print("   - 업데이트된 nameLabel: \(self.nameLabel.text ?? "nil")")
-                        print("   - 업데이트된 emailLabel: \(self.emailLabel.text ?? "nil")")
-                    }
+                    print("✅ UI 업데이트 후:")
+                    print("   - 업데이트된 nameLabel: \(self.nameLabel.text ?? "nil")")
+                    print("   - 업데이트된 emailLabel: \(self.emailLabel.text ?? "nil")")
                     
                 case .failure(let error):
                     print("❌ 사용자 정보 로드 실패: \(error.localizedDescription)")
@@ -342,18 +392,37 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         
-        // 화면이 새로 나타날 때마다 새로고침 (이전 상태가 이미 완료되었는지 확인)
-        if nameLabel.text == "사용자 이름" || emailLabel.text == "이메일" || isLoadingProfile == false {
-            print("♻️ viewWillAppear: UI가 기본값 상태 또는 로딩 중이 아님, 새로고침 필요")
+        // 프로필 수정 후에만 새로고침
+        if let needsRefresh = UserDefaults.standard.object(forKey: "profileNeedsRefresh") as? Bool, needsRefresh {
+            print("♻️ 프로필 변경 감지됨, 새로고침 필요")
+            // 새로고침 플래그 초기화
+            UserDefaults.standard.set(false, forKey: "profileNeedsRefresh")
+            // 프로필 다시 로드
+            loadUserProfile()
+        } else if !ProfileViewController.hasLoadedProfile {
+            // 최초 로드가 아직 안된 경우에만 로드
+            print("♻️ 최초 로드가 필요함")
             loadUserProfile()
         } else {
-            print("✅ viewWillAppear: UI가 이미 업데이트됨, 새로고침 불필요")
+            print("✅ 프로필 이미 로드됨, 새로고침 불필요")
+            
+            // 이미 캐시된 데이터가 있으면 UI 업데이트
+            if let cachedData = ProfileViewController.cachedUserData {
+                updateProfileUI(with: cachedData)
+            }
         }
     }
     
     @objc private func editProfileTapped() {
         let editVC = EditProfileViewController()
         editVC.completion = { [weak self] in
+            // 프로필 수정 완료 시 새로고침 필요 플래그 설정
+            UserDefaults.standard.set(true, forKey: "profileNeedsRefresh")
+            
+            // 캐시 무효화
+            ProfileViewController.cachedUserData = nil
+            
+            // 프로필 재로드
             self?.loadUserProfile()
         }
         present(editVC, animated: true)
@@ -399,6 +468,13 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
                     print("✅ 회원 탈퇴 성공")
                     UserDefaults.standard.removeObject(forKey: "userToken")
                     UserDefaults.standard.removeObject(forKey: "userId")
+                    UserDefaults.standard.removeObject(forKey: "profileNeedsRefresh")
+                    
+                    // 정적 프로퍼티 초기화
+                    ProfileViewController.hasLoadedProfile = false
+                    ProfileViewController.lastProfileLoadTime = nil
+                    ProfileViewController.cachedUserData = nil
+                    
                     self.navigateToLogin()
                 case .failure(let error):
                     print("❌ 회원 탈퇴 실패: \(error.localizedDescription)")
@@ -412,6 +488,13 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
         print("🔄 로그아웃 진행")
         UserDefaults.standard.removeObject(forKey: "userToken")
         UserDefaults.standard.removeObject(forKey: "userId")
+        UserDefaults.standard.removeObject(forKey: "profileNeedsRefresh")
+        
+        // 정적 프로퍼티 초기화
+        ProfileViewController.hasLoadedProfile = false
+        ProfileViewController.lastProfileLoadTime = nil
+        ProfileViewController.cachedUserData = nil
+        
         navigateToLogin()
     }
     
