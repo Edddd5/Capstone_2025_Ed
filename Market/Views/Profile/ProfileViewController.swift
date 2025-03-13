@@ -58,6 +58,17 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
         return button
     }()
     
+    // 위시리스트 버튼
+    private let wishlistButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.setTitle("내 위시리스트", for: .normal)
+        button.backgroundColor = .systemIndigo
+        button.setTitleColor(.white, for: .normal)
+        button.layer.cornerRadius = 10
+        button.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
+        return button
+    }()
+    
     // 회원 탈퇴 버튼
     private let deleteAccountButton: UIButton = {
         let button = UIButton(type: .system)
@@ -167,7 +178,7 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
         emailLabel.translatesAutoresizingMaskIntoConstraints = false
         
         // Buttons
-        [editProfileButton, deleteAccountButton, logoutButton].forEach {
+        [editProfileButton, wishlistButton, deleteAccountButton, logoutButton].forEach {
             view.addSubview($0)
             $0.translatesAutoresizingMaskIntoConstraints = false
         }
@@ -197,8 +208,14 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
             editProfileButton.widthAnchor.constraint(equalToConstant: 200),
             editProfileButton.heightAnchor.constraint(equalToConstant: 44),
             
+            // Wishlist Button
+            wishlistButton.topAnchor.constraint(equalTo: editProfileButton.bottomAnchor, constant: 16),
+            wishlistButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            wishlistButton.widthAnchor.constraint(equalToConstant: 200),
+            wishlistButton.heightAnchor.constraint(equalToConstant: 44),
+            
             // Delete Account Button
-            deleteAccountButton.topAnchor.constraint(equalTo: editProfileButton.bottomAnchor, constant: 16),
+            deleteAccountButton.topAnchor.constraint(equalTo: wishlistButton.bottomAnchor, constant: 16),
             deleteAccountButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             deleteAccountButton.widthAnchor.constraint(equalToConstant: 200),
             deleteAccountButton.heightAnchor.constraint(equalToConstant: 44),
@@ -212,6 +229,7 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
         
         // 버튼 액션 추가
         editProfileButton.addTarget(self, action: #selector(editProfileTapped), for: .touchUpInside)
+        wishlistButton.addTarget(self, action: #selector(wishlistTapped), for: .touchUpInside)
         deleteAccountButton.addTarget(self, action: #selector(deleteAccountTapped), for: .touchUpInside)
         logoutButton.addTarget(self, action: #selector(logoutTapped), for: .touchUpInside)
     }
@@ -268,6 +286,7 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
         if needsRefresh || !ProfileViewController.hasLoadedProfile {
             // 새로고침 필요하거나 최초 로드인 경우
             UserDefaults.standard.set(false, forKey: "profileNeedsRefresh")
+            // 프로필 다시 로드
             loadUserProfile()
         }
     }
@@ -352,13 +371,12 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
                     print("❌ 사용자 정보 로드 실패: \(error.localizedDescription)")
                     
                     if let networkError = error as? NetworkManager.NetworkError {
-                        switch networkError {
-                        case .invalidCredentials:
+                        if case .invalidCredentials = networkError {
                             self.showAlert(message: "인증에 실패했습니다. 다시 로그인해주세요.")
                             self.navigateToLogin()
-                        case .serverError(let code):
+                        } else if case .serverError(let code) = networkError {
                             self.showAlert(message: "서버 오류가 발생했습니다. (코드: \(code))")
-                        default:
+                        } else {
                             self.showAlert(message: networkError.localizedDescription)
                         }
                     } else {
@@ -426,6 +444,12 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
             self?.loadUserProfile()
         }
         present(editVC, animated: true)
+    }
+    
+    @objc private func wishlistTapped() {
+        // 위시리스트 화면으로 이동
+        let wishlistVC = WishlistViewController()
+        navigationController?.pushViewController(wishlistVC, animated: true)
     }
     
     @objc private func deleteAccountTapped() {
@@ -511,5 +535,16 @@ class ProfileViewController: UIViewController, UIImagePickerControllerDelegate, 
         )
         alert.addAction(UIAlertAction(title: "확인", style: .default))
         present(alert, animated: true)
+    }
+}
+
+// MARK: - 임시 WishlistViewController (실제 구현은 별도로 필요)
+class WishlistViewController: UIViewController {
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .white
+        title = "내 위시리스트"
+        
+        // 이곳에 위시리스트 구현 코드를 추가하세요
     }
 }

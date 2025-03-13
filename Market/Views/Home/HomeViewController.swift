@@ -11,6 +11,7 @@ class HomeViewController: UIViewController {
     
     // MARK: - Properties
     private var posts: [Post] = []
+    private var wishlistedPostIds: Set<Int> = [] // 위시리스트에 있는 포스트 ID 저장
     private var currentPage = 0
     private var isLastPage = false
     private var isLoading = false
@@ -53,6 +54,11 @@ class HomeViewController: UIViewController {
         super.viewWillAppear(animated)
         // 화면이 나타날 때마다 인증 상태 확인
         checkAuthenticationStatus()
+        
+        // 로그인 상태인 경우 위시리스트 로드
+        if isLoggedIn() {
+            loadWishlist()
+        }
     }
     
     // MARK: - Setup Methods
@@ -93,6 +99,11 @@ class HomeViewController: UIViewController {
         currentPage = 0
         isLastPage = false
         loadPosts()
+        
+        // 로그인 상태인 경우 위시리스트도 새로고침
+        if isLoggedIn() {
+            loadWishlist()
+        }
     }
     
     // MARK: - Actions
@@ -187,6 +198,114 @@ class HomeViewController: UIViewController {
                 loadPosts()
             }
         }
+    }
+    
+    // MARK: - Wishlist Methods
+    private func loadWishlist() {
+        guard isLoggedIn() else { return }
+        
+        NetworkManager.shared.getMyWishList { [weak self] result in
+            guard let self = self else { return }
+            
+            switch result {
+            case .success(let wishlist):
+                // 위시리스트 ID 추출
+                DispatchQueue.main.async {
+                    self.wishlistedPostIds = Set(wishlist.map { $0.postId })
+                    
+                    // 테이블뷰 새로고침하여 위시리스트 상태 반영
+                    self.tableView.reloadData()
+                }
+                
+            case .failure(let error):
+                print("Failed to load wishlist: \(error.localizedDescription)")
+                // 인증 오류인 경우, 토큰 제거
+                if let networkError = error as? NetworkManager.NetworkError {
+                    if case .authenticationRequired = networkError {
+                        DispatchQueue.main.async {
+                            UserDefaults.standard.removeObject(forKey: "userToken")
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func toggleWishlist(for postId: Int, isAdding: Bool) {
+        guard isLoggedIn() else {
+            showLoginRequiredAlert()
+            return
+        }
+        
+        print("🔄 위시리스트 \(isAdding ? "추가" : "제거") 시도 (postId: \(postId))")
+        
+        if isAdding {
+            // 함수명 확인 - addToWishlist로 수정 (소문자 l)
+            NetworkManager.shared.addToWishlist(postId: postId) { [weak self] result in
+                switch result {
+                case .success(_):
+                    print("✅ 위시리스트 추가 성공")
+                    DispatchQueue.main.async {
+                        self?.wishlistedPostIds.insert(postId)
+                        self?.tableView.reloadData()
+                    }
+                case .failure(let error):
+                    print("❌ 위시리스트 추가 실패: \(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        self?.handleWishlistError(error)
+                    }
+                }
+            }
+        } else {
+            NetworkManager.shared.removeFromWishlist(postId: postId) { [weak self] result in
+                switch result {
+                case .success(_):
+                    print("✅ 위시리스트 제거 성공")
+                    DispatchQueue.main.async {
+                        self?.wishlistedPostIds.remove(postId)
+                        self?.tableView.reloadData()
+                    }
+                case .failure(let error):
+                    print("❌ 위시리스트 제거 실패: \(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        self?.handleWishlistError(error)
+                    }
+                }
+            }
+        }
+    }
+    
+    private func handleWishlistError(_ error: Error) {
+        var message = "위시리스트 업데이트에 실패했습니다."
+        
+        if let networkError = error as? NetworkManager.NetworkError {
+            switch networkError {
+            case .authenticationRequired:
+                showLoginRequiredAlert()
+                return
+            default:
+                message = networkError.errorDescription ?? "오류가 발생했습니다."
+            }
+        }
+        
+        let alert = UIAlertController(title: "오류", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "확인", style: .default))
+        present(alert, animated: true)
+    }
+    
+    private func showLoginRequiredAlert() {
+        let alert = UIAlertController(
+            title: "로그인 필요",
+            message: "위시리스트 기능을 사용하려면 로그인이 필요합니다.",
+            preferredStyle: .alert
+        )
+        
+        alert.addAction(UIAlertAction(title: "취소", style: .cancel))
+        alert.addAction(UIAlertAction(title: "로그인", style: .default) { [weak self] _ in
+            self?.navigateToLogin()
+        })
+        
+        present(alert, animated: true)
     }
     
     // MARK: - API Calls
@@ -286,7 +405,14 @@ extension HomeViewController: UITableViewDelegate, UITableViewDataSource {
         }
         
         let post = posts[indexPath.row]
-        cell.configure(with: post)
+        // 위시리스트 상태 확인
+        let isInWishlist = wishlistedPostIds.contains(post.id)
+        cell.configure(with: post, isInWishlist: isInWishlist)
+        
+        // 위시리스트 토글 액션 설정
+        cell.toggleWishlistAction = { [weak self] postId, isAdding in
+            self?.toggleWishlist(for: postId, isAdding: isAdding)
+        }
         
         // Load more posts when user reaches the end
         if indexPath.row == posts.count - 1 && !isLoading && !isLastPage {
@@ -364,9 +490,24 @@ class ProductCell: UITableViewCell {
         return label
     }()
     
+    // 위시리스트 버튼 추가
+    let wishlistButton: UIButton = {
+        let button = UIButton(type: .system)
+        let heartImage = UIImage(systemName: "heart")
+        button.setImage(heartImage, for: .normal)
+        button.tintColor = .gray
+        button.translatesAutoresizingMaskIntoConstraints = false
+        return button
+    }()
+    
+    private var postId: Int = 0
+    private var isInWishlist: Bool = false
+    var toggleWishlistAction: ((Int, Bool) -> Void)?
+    
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
         setupViews()
+        setupActions()
     }
     
     required init?(coder: NSCoder) {
@@ -379,6 +520,7 @@ class ProductCell: UITableViewCell {
         contentView.addSubview(priceLabel)
         contentView.addSubview(placeLabel)
         contentView.addSubview(statusView)
+        contentView.addSubview(wishlistButton) // 위시리스트 버튼 추가
         statusView.addSubview(statusLabel)
         
         NSLayoutConstraint.activate([
@@ -389,7 +531,7 @@ class ProductCell: UITableViewCell {
             
             titleLabel.leadingAnchor.constraint(equalTo: productImageView.trailingAnchor, constant: 12),
             titleLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
-            titleLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            titleLabel.trailingAnchor.constraint(equalTo: wishlistButton.leadingAnchor, constant: -8),
             
             priceLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             priceLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
@@ -407,17 +549,44 @@ class ProductCell: UITableViewCell {
             statusLabel.leadingAnchor.constraint(equalTo: statusView.leadingAnchor),
             statusLabel.trailingAnchor.constraint(equalTo: statusView.trailingAnchor),
             statusLabel.topAnchor.constraint(equalTo: statusView.topAnchor),
-            statusLabel.bottomAnchor.constraint(equalTo: statusView.bottomAnchor)
+            statusLabel.bottomAnchor.constraint(equalTo: statusView.bottomAnchor),
+            
+            // 위시리스트 버튼 제약 조건
+            wishlistButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            wishlistButton.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -16),
+            wishlistButton.widthAnchor.constraint(equalToConstant: 32),
+            wishlistButton.heightAnchor.constraint(equalToConstant: 32)
         ])
     }
     
-    func configure(with post: Post) {
+    private func setupActions() {
+        wishlistButton.addTarget(self, action: #selector(wishlistButtonTapped), for: .touchUpInside)
+    }
+    
+    @objc private func wishlistButtonTapped() {
+        // 위시리스트 상태 토글
+        isInWishlist = !isInWishlist
+        
+        // 버튼 외관 업데이트
+        updateWishlistButtonAppearance()
+        
+        // 뷰 컨트롤러의 액션 호출
+        toggleWishlistAction?(postId, isInWishlist)
+    }
+    
+    func configure(with post: Post, isInWishlist: Bool) {
+        self.postId = post.id
+        self.isInWishlist = isInWishlist
+        
         titleLabel.text = post.title
         priceLabel.text = formatPrice(post.price)
         placeLabel.text = post.place ?? "위치 정보 없음"
         
         // 상태 설정
         configureStatus(post.status)
+        
+        // 위시리스트 버튼 업데이트
+        updateWishlistButtonAppearance()
         
         // 첫 번째 이미지 로드
         if let imageUrls = post.imageUrls, !imageUrls.isEmpty {
@@ -430,6 +599,20 @@ class ProductCell: UITableViewCell {
             }
         } else {
             productImageView.image = nil
+        }
+    }
+    
+    private func updateWishlistButtonAppearance() {
+        if isInWishlist {
+            // 위시리스트에 있는 경우 - 채워진 하트
+            let heartImage = UIImage(systemName: "heart.fill")
+            wishlistButton.setImage(heartImage, for: .normal)
+            wishlistButton.tintColor = .systemRed
+        } else {
+            // 위시리스트에 없는 경우 - 빈 하트
+            let heartImage = UIImage(systemName: "heart")
+            wishlistButton.setImage(heartImage, for: .normal)
+            wishlistButton.tintColor = .gray
         }
     }
     
@@ -480,6 +663,11 @@ class ProductCell: UITableViewCell {
         priceLabel.text = nil
         placeLabel.text = nil
         statusView.isHidden = false
+        
+        // 위시리스트 버튼 초기화
+        let heartImage = UIImage(systemName: "heart")
+        wishlistButton.setImage(heartImage, for: .normal)
+        wishlistButton.tintColor = .gray
     }
 }
 

@@ -734,6 +734,191 @@ class NetworkManager {
         print("🔄 이메일로 사용자 ID 요청 전송됨")
     }
     
+    // 찜 목록
+    func getMyWishList(completion: @escaping (Result<[Wishlist], Error > ) -> Void) {
+        let urlString = "\(baseURL)/api/wishlist/getmywishlist"
+        
+        guard let url = URL(string: urlString) else {
+            completion(.failure(NetworkError.invalidURL))
+            return
+        }
+        
+        guard let token = UserDefaults.standard.string(forKey: "userToken") else {
+            completion(.failure(NetworkError.authenticationRequired))
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NetworkError.invalidResponse))
+                return
+            }
+            
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                completion(.failure(NetworkError.authenticationRequired))
+                return
+            }
+            
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(NetworkError.serverError(httpResponse.statusCode)))
+                return
+            }
+            
+            guard let data = data else {
+                completion(.failure(NetworkError.noData))
+                return
+            }
+            
+            do {
+                if let responseString = String(data: data, encoding: .utf8) {
+                    print("Wishlist Response: \(responseString)")
+                }
+                
+                let decoder = JSONDecoder()
+                let wishlist = try decoder.decode([Wishlist].self, from: data)
+                completion(.success(wishlist))
+            } catch {
+                print("Error decoding wishlist: \(error)")
+                completion(.failure(error))
+            }
+        }
+        
+        task.resume()
+    }
+    
+    // NetworkManager에서 위시리스트 관련 함수를 수정
+    func addToWishlist(postId: Int, completion: @escaping (Result<Wishlist, Error>) -> Void) {
+        let urlString = "\(baseURL)/api/wishlist/\(postId)"
+        print("🔄 위시리스트 추가 요청: \(urlString)")
+        
+        guard let url = URL(string: urlString) else {
+            print("❌ 잘못된 URL: \(urlString)")
+            completion(.failure(NetworkError.invalidURL))
+            return
+        }
+        
+        guard let token = UserDefaults.standard.string(forKey: "userToken") else {
+            print("❌ 토큰이 없음")
+            completion(.failure(NetworkError.authenticationRequired))
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        print("🔄 Authorization: Bearer \(token.prefix(15))...")
+        
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                print("❌ 네트워크 오류: \(error.localizedDescription)")
+                completion(.failure(error))
+                return
+            }
+            
+            if let httpResponse = response as? HTTPURLResponse {
+                print("ℹ️ HTTP 상태 코드: \(httpResponse.statusCode)")
+            }
+            
+            // 응답 데이터 출력
+            if let data = data, let responseString = String(data: data, encoding: .utf8) {
+                print("ℹ️ 응답 데이터: \(responseString)")
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                print("❌ 올바르지 않은 HTTP 응답")
+                completion(.failure(NetworkError.invalidResponse))
+                return
+            }
+            
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                print("❌ 인증 오류 (코드: \(httpResponse.statusCode))")
+                completion(.failure(NetworkError.authenticationRequired))
+                return
+            }
+            
+            guard (200...299).contains(httpResponse.statusCode) else {
+                print("❌ 서버 오류 (코드: \(httpResponse.statusCode))")
+                completion(.failure(NetworkError.serverError(httpResponse.statusCode)))
+                return
+            }
+            
+            guard let data = data else {
+                print("❌ 응답 데이터가 없음")
+                completion(.failure(NetworkError.noData))
+                return
+            }
+            
+            do {
+                print("🔄 응답 디코딩 시도")
+                let decoder = JSONDecoder()
+                let wishlist = try decoder.decode(Wishlist.self, from: data)
+                print("✅ 위시리스트 추가 성공")
+                completion(.success(wishlist))
+            } catch {
+                print("❌ JSON 디코딩 오류: \(error)")
+                completion(.failure(error))
+            }
+        }
+        
+        print("🔄 위시리스트 추가 요청 전송됨")
+        task.resume()
+    }
+    
+    // 찜 삭제
+    func removeFromWishlist(postId: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        let urlString = "\(baseURL)/api/wishlist/\(postId)"
+        
+        guard let url = URL(string: urlString) else {
+            completion(.failure(NetworkError.invalidURL))
+            return
+        }
+        
+        guard let token = UserDefaults.standard.string(forKey: "userToken") else {
+            completion(.failure(NetworkError.authenticationRequired))
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NetworkError.invalidResponse))
+                return
+            }
+            
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                completion(.failure(NetworkError.authenticationRequired))
+                return
+            }
+            
+            guard (200...299).contains(httpResponse.statusCode) else {
+                completion(.failure(NetworkError.serverError(httpResponse.statusCode)))
+                return
+            }
+            
+            completion(.success(()))
+        }
+        
+        task.resume()
+    }
+    
     enum NetworkError: LocalizedError {
         case invalidURL
         case noData
