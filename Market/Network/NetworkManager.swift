@@ -163,93 +163,186 @@ class NetworkManager {
     // 게시물 작성
     func createPost(title: String, content: String, price: Int, place: String?, images: [Data]?, completion: @escaping (Result<Post, Error>) -> Void) {
         let urlString = "\(baseURL)/api/post"
+        print("🔄 게시물 생성 요청 URL: \(urlString)")
+        
         guard let url = URL(string: urlString) else {
+            print("❌ 잘못된 URL: \(urlString)")
             completion(.failure(NetworkError.invalidURL))
             return
         }
         
         // 토큰 확인
         guard let token = UserDefaults.standard.string(forKey: "userToken") else {
+            print("❌ 인증 토큰 없음")
             completion(.failure(NetworkError.authenticationRequired))
             return
         }
         
+        print("✅ 인증 토큰 확인: \(token.prefix(15))...")
+        
         // multipart/form-data 경계 문자열 생성
-        let boundary = UUID().uuidString
+        let boundary = "Boundary-\(UUID().uuidString)"
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         
+        // 타임아웃 값 늘리기 (이미지 업로드 시간 고려)
+        request.timeoutInterval = 60.0
+        
         var body = Data()
         
-        // 텍스트 필드 추가
-        let textParams: [String: String] = [
-            "title": title,
-            "content": content,
-            "price": "\(price)",
-            "place": place ?? ""
-        ]
+        // 요청 파라미터 로깅
+        print("📤 전송 파라미터:")
+        print("   - title: \(title)")
+        print("   - content: \(content.prefix(50))...")
+        print("   - price: \(price)")
+        print("   - place: \(place ?? "없음")")
         
-        for (key, value) in textParams {
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
-            body.append("\(value)\r\n".data(using: .utf8)!)
+        // 필수 필드 추가
+        addFormField(to: &body, boundary: boundary, name: "title", value: title)
+        addFormField(to: &body, boundary: boundary, name: "content", value: content)
+        addFormField(to: &body, boundary: boundary, name: "price", value: "\(price)")
+        
+        // 위치 필드 추가 (옵셔널)
+        if let place = place, !place.isEmpty {
+            addFormField(to: &body, boundary: boundary, name: "place", value: place)
+        } else {
+            // place가 null인 경우 빈 문자열로 전송
+            addFormField(to: &body, boundary: boundary, name: "place", value: "")
         }
         
-        // 이미지 추가
+        // 이미지 추가 - images 파라미터 이름 명확히 지정
         if let images = images, !images.isEmpty {
+            print("📤 이미지 \(images.count)개 첨부")
+            
             for (index, imageData) in images.enumerated() {
-                body.append("--\(boundary)\r\n".data(using: .utf8)!)
-                body.append("Content-Disposition: form-data; name=\"images\"; filename=\"image\(index).jpg\"\r\n".data(using: .utf8)!)
-                body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
-                body.append(imageData)
-                body.append("\r\n".data(using: .utf8)!)
+                let imageSizeKB = Double(imageData.count) / 1024.0
+                print("   - 이미지 #\(index+1): \(String(format: "%.1f", imageSizeKB))KB")
+                
+                // 'images' 이름을 사용하여 파일 추가 (서버 컨트롤러와 일치)
+                addImageField(to: &body, boundary: boundary, name: "images", fileName: "image\(index).jpg", mimeType: "image/jpeg", data: imageData)
             }
+        } else {
+            print("📤 첨부된 이미지 없음")
         }
         
         // 경계 종료
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
         
+        // 요청 본문 크기 확인 및 로깅
+        let bodySizeMB = Double(body.count) / (1024.0 * 1024.0)
+        print("📤 요청 본문 크기: \(String(format: "%.2f", bodySizeMB))MB")
+        
         request.httpBody = body
         
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
             if let error = error {
+                print("❌ 네트워크 오류: \(error.localizedDescription)")
                 completion(.failure(error))
                 return
             }
             
             guard let httpResponse = response as? HTTPURLResponse else {
+                print("❌ 올바르지 않은 HTTP 응답")
                 completion(.failure(NetworkError.invalidResponse))
                 return
             }
             
+            print("ℹ️ HTTP 상태 코드: \(httpResponse.statusCode)")
+            
+            // HTTP 헤더 정보 출력 (디버깅용)
+            print("ℹ️ HTTP 헤더:")
+            httpResponse.allHeaderFields.forEach { key, value in
+                print("   \(key): \(value)")
+            }
+            
+            // 응답 본문 출력
+            if let data = data, let responseString = String(data: data, encoding: .utf8) {
+                print("ℹ️ 응답 본문:")
+                print(responseString)
+            }
+            
+            // 401/403 오류 처리
             if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                print("❌ 인증 오류 (코드: \(httpResponse.statusCode))")
                 completion(.failure(NetworkError.authenticationRequired))
                 return
             }
             
+            // 상태 코드 확인
             guard (200...299).contains(httpResponse.statusCode) else {
+                print("❌ 서버 오류 (코드: \(httpResponse.statusCode))")
+                // 500 오류의 경우 응답 본문에서 추가 정보 확인 시도
+                if httpResponse.statusCode == 500, let data = data, let errorMessage = String(data: data, encoding: .utf8) {
+                    print("❌ 서버 오류 상세: \(errorMessage)")
+                }
                 completion(.failure(NetworkError.serverError(httpResponse.statusCode)))
                 return
             }
             
             guard let data = data else {
+                print("❌ 응답 데이터 없음")
                 completion(.failure(NetworkError.noData))
                 return
             }
             
+            // JSON 파싱 및 디코딩
             do {
+                // 서버 응답이 Post 객체와 일치하는지 확인 (디버깅용)
+                if let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
+                    print("✅ JSON 구조:")
+                    print(json.keys)
+                }
+                
                 let decoder = JSONDecoder()
+                decoder.keyDecodingStrategy = .useDefaultKeys
                 let post = try decoder.decode(Post.self, from: data)
+                print("✅ 게시물 생성 성공 (ID: \(post.id))")
                 completion(.success(post))
             } catch {
+                print("❌ JSON 디코딩 오류: \(error)")
+                
+                // 상세 디코딩 오류 정보
+                if let decodingError = error as? DecodingError {
+                    switch decodingError {
+                    case .keyNotFound(let key, _):
+                        print("   - 찾을 수 없는 키: \(key.stringValue)")
+                    case .valueNotFound(let type, _):
+                        print("   - 찾을 수 없는 값 타입: \(type)")
+                    case .typeMismatch(let type, let context):
+                        print("   - 타입 불일치: \(type)")
+                        print("   - 경로: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+                    case .dataCorrupted(let context):
+                        print("   - 데이터 손상: \(context.debugDescription)")
+                    @unknown default:
+                        print("   - 알 수 없는 디코딩 오류")
+                    }
+                }
+                
                 completion(.failure(error))
             }
         }
         
+        print("🔄 게시물 생성 요청 전송됨")
         task.resume()
+    }
+    
+    // multipart/form-data 형식에 텍스트 필드 추가 헬퍼 메서드
+    private func addFormField(to body: inout Data, boundary: String, name: String, value: String) {
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(value)\r\n".data(using: .utf8)!)
+    }
+    
+    // multipart/form-data 형식에 이미지 필드 추가 헬퍼 메서드 (개선됨)
+    private func addImageField(to body: inout Data, boundary: String, name: String, fileName: String, mimeType: String, data: Data) {
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
+        body.append(data)
+        body.append("\r\n".data(using: .utf8)!)
     }
     
     // 회원정보 가져오기
@@ -407,7 +500,7 @@ class NetworkManager {
             if let data = data, let responseString = String(data: data, encoding: .utf8) {
                 print("Server response: \(responseString)")
             }
-
+            
             guard let httpResponse = response as? HTTPURLResponse else {
                 completion(.failure(NetworkError.invalidResponse))
                 return
@@ -467,7 +560,7 @@ class NetworkManager {
                     print("✅ 로그인 응답에서 userId 추출 성공: \(userId)")
                     UserDefaults.standard.set(userId, forKey: "userId")
                 } else if let jsonData = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                         let id = jsonData["id"] as? Int {
+                          let id = jsonData["id"] as? Int {
                     print("✅ 로그인 응답에서 id 추출 성공: \(id)")
                     UserDefaults.standard.set(id, forKey: "userId")
                 } else {
@@ -603,7 +696,7 @@ class NetworkManager {
         }
         task.resume()
     }
-
+    
     // 회원 탈퇴
     func deleteAccount(token: String, completion: @escaping (Result<String, Error>) -> Void) {
         guard let url = URL(string: "\(baseURL)/api/deleteuser") else {
@@ -873,6 +966,67 @@ class NetworkManager {
         print("🔄 위시리스트 추가 요청 전송됨")
         task.resume()
     }
+    
+    // 게시물 삭제하기
+    func deletePost(postId: Int, userId: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+            let urlString = "\(baseURL)/api/post/\(postId)"
+            print("🔄 게시물 삭제 요청: \(urlString)")
+            
+            guard let url = URL(string: urlString) else {
+                print("❌ 잘못된 URL: \(urlString)")
+                completion(.failure(NetworkError.invalidURL))
+                return
+            }
+            
+            guard let token = UserDefaults.standard.string(forKey: "userToken") else {
+                print("❌ 인증 토큰 없음")
+                completion(.failure(NetworkError.authenticationRequired))
+                return
+            }
+            
+            var request = URLRequest(url: url)
+            request.httpMethod = "DELETE"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            
+            // 요청 로깅
+            print("🔄 DELETE 요청: \(url.absoluteString)")
+            print("🔄 Authorization: Bearer \(token.prefix(15))...")
+            
+            let task = URLSession.shared.dataTask(with: request) { data, response, error in
+                if let error = error {
+                    print("❌ 네트워크 오류: \(error.localizedDescription)")
+                    completion(.failure(error))
+                    return
+                }
+                
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    print("❌ 올바르지 않은 HTTP 응답")
+                    completion(.failure(NetworkError.invalidResponse))
+                    return
+                }
+                
+                print("ℹ️ HTTP 상태 코드: \(httpResponse.statusCode)")
+                
+                // 401/403 오류 처리
+                if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                    print("❌ 인증 오류 (코드: \(httpResponse.statusCode))")
+                    completion(.failure(NetworkError.authenticationRequired))
+                    return
+                }
+                
+                // 상태 코드 확인
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    print("❌ 서버 오류 (코드: \(httpResponse.statusCode))")
+                    completion(.failure(NetworkError.serverError(httpResponse.statusCode)))
+                    return
+                }
+                
+                print("✅ 게시물 삭제 성공 (ID: \(postId))")
+                completion(.success(()))
+            }
+            
+            task.resume()
+        }
     
     // 찜 삭제
     func removeFromWishlist(postId: Int, completion: @escaping (Result<Void, Error>) -> Void) {

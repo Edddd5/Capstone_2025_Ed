@@ -117,18 +117,8 @@ class HomeViewController: UIViewController {
             return
         }
         
-        // TODO: PostCreationViewController 구현 후 아래 코드 주석 해제
-        // let postCreationVC = PostCreationViewController()
-        // navigationController?.pushViewController(postCreationVC, animated: true)
-        
-        // 임시 알림 - 실제 구현 시 제거
-        let alert = UIAlertController(
-            title: "게시물 작성",
-            message: "게시물 작성 화면으로 이동합니다.",
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "확인", style: .default))
-        present(alert, animated: true)
+        let postVC = PostViewController()
+        navigationController?.pushViewController(postVC, animated: true)
     }
     
     private func setupViews() {
@@ -428,12 +418,14 @@ extension HomeViewController: UITableViewDelegate, UITableViewDataSource {
     
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        let post = posts[indexPath.row]
-        print("Selected post: \(post.title)")
         
-        // TODO: Navigate to post detail view
-        // let detailVC = PostDetailViewController(post: post)
-        // navigationController?.pushViewController(detailVC, animated: true)
+        // 선택한 게시물 가져오기
+        let post = posts[indexPath.row]
+        print("Selected Post : \(post.title)")
+        
+        // 상세 페이지로 이동하기
+        let detailVC = PostDetailViewController(post: post)
+        navigationController?.pushViewController(detailVC, animated: true)
     }
 }
 
