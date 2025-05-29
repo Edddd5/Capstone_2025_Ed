@@ -14,6 +14,7 @@ class SignupViewController: UIViewController {
         let label = UILabel()
         label.text = "Sign Up"
         label.font = .systemFont(ofSize: 35, weight: .bold)
+        label.textColor = UIColor(red: 75/255, green: 60/255, blue: 196/255, alpha: 1.0) // #4B3CC4 색상
         label.textAlignment = .center
         return label
     }()
@@ -65,7 +66,8 @@ class SignupViewController: UIViewController {
     private let signupButton: UIButton = {
         let button = UIButton(type: .system)
         button.setTitle("Sign Up", for: .normal) // 버튼 텍스트 설정
-        button.backgroundColor = .systemBlue
+        button.backgroundColor = UIColor(red: 75/255, green: 60/255, blue: 196/255, alpha: 1.0) // #4B3CC4 색상
+
         button.setTitleColor(.white, for: .normal)
         button.layer.cornerRadius = 5
         return button

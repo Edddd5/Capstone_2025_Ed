@@ -11,8 +11,9 @@ class LoginViewController: UIViewController {
     // Market Title Label (추후 로고로 수정)
     private let marketLabel: UILabel = {
         let label = UILabel()
-        label.text = "Market"
+        label.text = "Hanlumi"
         label.font = .systemFont(ofSize: 35, weight: .bold)
+        label.textColor = UIColor(red: 75/255, green: 60/255, blue: 196/255, alpha: 1.0) // #4B3CC4 색상
         label.textAlignment = .center
         return label
     }()
@@ -41,21 +42,22 @@ class LoginViewController: UIViewController {
     
     // Login Button
     private let loginButton: UIButton = {
-        let button = UIButton(type: .system)
-        button.setTitle("Login", for: .normal)
-        button.backgroundColor = .systemBlue
-        button.setTitleColor(.white, for: .normal)
-        button.layer.cornerRadius = 5
-        button.addTarget(self, action: #selector(loginButtonTapped), for: .touchUpInside)
-        return button
+       let button = UIButton(type: .system)
+       button.setTitle("Login", for: .normal)
+       button.backgroundColor = UIColor(red: 75/255, green: 60/255, blue: 196/255, alpha: 1.0) // #4B3CC4 색상
+       button.setTitleColor(.white, for: .normal)
+       button.layer.cornerRadius = 5
+       button.addTarget(self, action: #selector(loginButtonTapped), for: .touchUpInside)
+       return button
     }()
-    
+
     // SignUp Button
     private let signupButton: UIButton = {
-        let button = UIButton(type: .system)
-        button.setTitle("Sign Up", for: .normal)
-        button.addTarget(self, action: #selector(navigateToSignup), for: .touchUpInside)
-        return button
+       let button = UIButton(type: .system)
+       button.setTitle("Sign Up", for: .normal)
+       button.setTitleColor(UIColor(red: 75/255, green: 60/255, blue: 196/255, alpha: 1.0), for: .normal) // #4B3CC4 색상
+       button.addTarget(self, action: #selector(navigateToSignup), for: .touchUpInside)
+       return button
     }()
     
     override func viewDidLoad() {

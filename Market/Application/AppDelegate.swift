@@ -27,4 +27,21 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // If any sessions were discarded while the application was not running, this will be called shortly after application:didFinishLaunchingWithOptions.
         // Use this method to release any resources that were specific to the discarded scenes, as they will not return.
     }
+    
+    func setupLoginNotification() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleLoginStatusChanged(_:)),
+            name: NSNotification.Name("LoginStatusChanged"),
+            object: nil
+        )
+    }
+    
+    @objc func handleLoginStatusChanged(_ notification: Notification) {
+        if let isLoggedIn = notification.userInfo?["isLoggedIn"] as? Bool {
+            if !isLoggedIn {
+                NetworkManager.shared.disconnectWebSocket()
+            }
+        }
+    }
 }
