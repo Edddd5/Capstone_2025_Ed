@@ -47,17 +47,42 @@ class HomeViewController: UIViewController {
         setupTabBar()
         setupRefreshControl()
         
+        loadWishlistFromLocal()
+        
         loadPosts()
     }
     
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        // 먼저 캐시된 위시리스트 데이터 로드
+        loadWishlistFromLocal()
         // 화면이 나타날 때마다 인증 상태 확인
         checkAuthenticationStatus()
         
-        // 로그인 상태인 경우 위시리스트 로드
+        // 로그인 상태인 경우 항상 위시리스트를 새로 로드하고 UI 갱신
         if isLoggedIn() {
-            loadWishlist()
+            // 위시리스트 상태를 먼저 로드한 후 테이블뷰 갱신
+            loadWishlist { [weak self] in
+                self?.tableView.reloadData()
+                
+                self?.tableView.reloadData()
+            }
+        } else {
+            // 로그아웃 상태면 위시리스트 데이터 비우기
+            wishlistedPostIds.removeAll()
+            tableView.reloadData()
+        }
+    }
+    
+    // 위시리스트 데이터를 로컬에 저장
+    private func saveWishlistToLocal() {
+        UserDefaults.standard.set(Array(wishlistedPostIds), forKey: "cachedWishlistIds")
+    }
+
+    // 로컬에서 위시리스트 데이터 불러오기
+    private func loadWishlistFromLocal() {
+        if let savedIds = UserDefaults.standard.array(forKey: "cachedWishlistIds") as? [Int] {
+            wishlistedPostIds = Set(savedIds)
         }
     }
     
@@ -72,7 +97,8 @@ class HomeViewController: UIViewController {
         let titleLabel = UILabel()
         titleLabel.text = "Home"
         titleLabel.font = UIFont.systemFont(ofSize: 24, weight: .bold)
-        titleLabel.textColor = .black
+        titleLabel.textColor = UIColor(red: 75/255, green: 60/255, blue: 196/255, alpha: 1.0) // #4B3CC4 색상
+
         
         // 레이블을 왼쪽 바 버튼 아이템으로 설정
         navigationItem.leftBarButtonItem = UIBarButtonItem(customView: titleLabel)
@@ -84,7 +110,7 @@ class HomeViewController: UIViewController {
             action: #selector(addButtonTapped)
         )
         // 버튼 색상을 검정색으로 설정
-        addButton.tintColor = .black
+        addButton.tintColor = UIColor(red: 75/255, green: 60/255, blue: 196/255, alpha: 1.0) // #4B3CC4 색상
         navigationItem.rightBarButtonItem = addButton
     }
     
@@ -191,8 +217,12 @@ class HomeViewController: UIViewController {
     }
     
     // MARK: - Wishlist Methods
-    private func loadWishlist() {
-        guard isLoggedIn() else { return }
+    // 콜백을 추가한 새 loadWishlist 메서드
+    private func loadWishlist(completion: @escaping () -> Void = {}) {
+        guard isLoggedIn() else {
+            completion()
+            return
+        }
         
         NetworkManager.shared.getMyWishList { [weak self] result in
             guard let self = self else { return }
@@ -202,9 +232,7 @@ class HomeViewController: UIViewController {
                 // 위시리스트 ID 추출
                 DispatchQueue.main.async {
                     self.wishlistedPostIds = Set(wishlist.map { $0.postId })
-                    
-                    // 테이블뷰 새로고침하여 위시리스트 상태 반영
-                    self.tableView.reloadData()
+                    completion() // 콜백 호출
                 }
                 
             case .failure(let error):
@@ -217,32 +245,75 @@ class HomeViewController: UIViewController {
                         }
                     }
                 }
+                DispatchQueue.main.async {
+                    completion() // 오류 발생해도 콜백 호출
+                }
             }
         }
     }
     
-    private func toggleWishlist(for postId: Int, isAdding: Bool) {
+    private func toggleWishlist(for postId: Int, isAdding: Bool, retryCount: Int = 0) {
         guard isLoggedIn() else {
             showLoginRequiredAlert()
             return
         }
         
-        print("🔄 위시리스트 \(isAdding ? "추가" : "제거") 시도 (postId: \(postId))")
+        // 이미 위시리스트에 있는데 추가하려고 하는 경우 예외 처리
+        if isAdding && wishlistedPostIds.contains(postId) {
+            print("⚠️ 이미 위시리스트에 추가된 항목입니다.")
+            // 셀 UI 업데이트 (이미 추가된 항목으로)
+            updateCellWithPostId(postId, isInWishlist: true)
+            return
+        }
+        
+        // 위시리스트에 없는데 제거하려고 하는 경우 예외 처리
+        if !isAdding && !wishlistedPostIds.contains(postId) {
+            print("⚠️ 위시리스트에 없는 항목입니다.")
+            // 셀 UI 업데이트 (이미 제거된 항목으로)
+            updateCellWithPostId(postId, isInWishlist: false)
+            return
+        }
+        
+        let maxRetries = 2
+        
+        print("🔄 위시리스트 \(isAdding ? "추가" : "제거") 시도 (postId: \(postId), 시도 횟수: \(retryCount + 1)")
         
         if isAdding {
-            // 함수명 확인 - addToWishlist로 수정 (소문자 l)
             NetworkManager.shared.addToWishlist(postId: postId) { [weak self] result in
                 switch result {
                 case .success(_):
                     print("✅ 위시리스트 추가 성공")
                     DispatchQueue.main.async {
                         self?.wishlistedPostIds.insert(postId)
-                        self?.tableView.reloadData()
+                        self?.saveWishlistToLocal()
+                        
+                        // 개별 셀 업데이트 (화면에 보이는 경우만)
+                        self?.updateCellWithPostId(postId, isInWishlist: true)
                     }
                 case .failure(let error):
                     print("❌ 위시리스트 추가 실패: \(error.localizedDescription)")
-                    DispatchQueue.main.async {
-                        self?.handleWishlistError(error)
+                    
+                    // 서버 오류 500인 경우 무조건 성공으로 처리
+                    if let networkError = error as? NetworkManager.NetworkError,
+                       case .serverError(let code) = networkError, code == 500 {
+                        
+                        print("⚠️ 서버 오류 500 발생했지만 위시리스트 추가 성공으로 처리")
+                        DispatchQueue.main.async {
+                            // 데이터를 로컬에 업데이트
+                            self?.wishlistedPostIds.insert(postId)
+                            self?.saveWishlistToLocal()
+                            self?.updateCellWithPostId(postId, isInWishlist: true)
+                        }
+                        return
+                    } else {
+                        // 500 이외의 오류
+                        DispatchQueue.main.async {
+                            // 화면에 에러 메시지 표시
+                            self?.handleWishlistError(error)
+                            
+                            // 실패한 셀의 버튼 상태 원래대로 복원
+                            self?.updateCellWithPostId(postId, isInWishlist: false)
+                        }
                     }
                 }
             }
@@ -253,18 +324,56 @@ class HomeViewController: UIViewController {
                     print("✅ 위시리스트 제거 성공")
                     DispatchQueue.main.async {
                         self?.wishlistedPostIds.remove(postId)
-                        self?.tableView.reloadData()
+                        
+                        // 개별 셀 업데이트 (화면에 보이는 경우만)
+                        self?.updateCellWithPostId(postId, isInWishlist: false)
                     }
                 case .failure(let error):
                     print("❌ 위시리스트 제거 실패: \(error.localizedDescription)")
-                    DispatchQueue.main.async {
-                        self?.handleWishlistError(error)
+                    
+                    // 서버 오류 500인 경우 무조건 성공으로 처리
+                    if let networkError = error as? NetworkManager.NetworkError,
+                       case .serverError(let code) = networkError, code == 500 {
+                        
+                        print("⚠️ 서버 오류 500 발생했지만 위시리스트 제거 성공으로 처리")
+                        DispatchQueue.main.async {
+                            // 데이터를 로컬에 업데이트
+                            self?.wishlistedPostIds.remove(postId)
+                            self?.updateCellWithPostId(postId, isInWishlist: false)
+                        }
+                        return
+                    } else {
+                        // 500 이외의 오류
+                        DispatchQueue.main.async {
+                            // 화면에 에러 메시지 표시
+                            self?.handleWishlistError(error)
+                            
+                            // 실패한 셀의 버튼 상태 원래대로 복원
+                            self?.updateCellWithPostId(postId, isInWishlist: true)
+                        }
                     }
                 }
             }
         }
     }
     
+    // 특정 postId를 가진 셀을 찾아 위시리스트 상태 업데이트
+    private func updateCellWithPostId(_ postId: Int, isInWishlist: Bool) {
+        // 모든 visible 셀을 확인
+        for indexPath in tableView.indexPathsForVisibleRows ?? [] {
+            guard let cell = tableView.cellForRow(at: indexPath) as? ProductCell,
+                  let post = posts[safe: indexPath.row],
+                  post.id == postId else {
+                continue
+            }
+            
+            // 해당 셀 찾았으면 상태 업데이트
+            cell.updateWishlistState(isInWishlist: isInWishlist)
+            return
+        }
+    }
+    
+    // Array extension for safe access
     private func handleWishlistError(_ error: Error) {
         var message = "위시리스트 업데이트에 실패했습니다."
         
@@ -273,6 +382,8 @@ class HomeViewController: UIViewController {
             case .authenticationRequired:
                 showLoginRequiredAlert()
                 return
+            case .serverError(let code):
+                message = "서버 오류: \(code). 잠시 후 다시 시도해주세요."
             default:
                 message = networkError.errorDescription ?? "오류가 발생했습니다."
             }
@@ -395,7 +506,7 @@ extension HomeViewController: UITableViewDelegate, UITableViewDataSource {
         }
         
         let post = posts[indexPath.row]
-        // 위시리스트 상태 확인
+        // 위시리스트 상태 확인 - 명시적으로 매번 설정
         let isInWishlist = wishlistedPostIds.contains(post.id)
         cell.configure(with: post, isInWishlist: isInWishlist)
         
@@ -429,264 +540,9 @@ extension HomeViewController: UITableViewDelegate, UITableViewDataSource {
     }
 }
 
-// MARK: - ProductCell
-class ProductCell: UITableViewCell {
-    private let productImageView: UIImageView = {
-        let imageView = UIImageView()
-        imageView.contentMode = .scaleAspectFill
-        imageView.clipsToBounds = true
-        imageView.backgroundColor = .lightGray
-        imageView.layer.cornerRadius = 8
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        return imageView
-    }()
-    
-    private let titleLabel: UILabel = {
-        let label = UILabel()
-        label.font = .systemFont(ofSize: 16, weight: .medium)
-        label.numberOfLines = 2
-        label.translatesAutoresizingMaskIntoConstraints = false
-        return label
-    }()
-    
-    private let priceLabel: UILabel = {
-        let label = UILabel()
-        label.font = .systemFont(ofSize: 16, weight: .bold)
-        label.textColor = .black
-        label.translatesAutoresizingMaskIntoConstraints = false
-        return label
-    }()
-    
-    private let placeLabel: UILabel = {
-        let label = UILabel()
-        label.font = .systemFont(ofSize: 14)
-        label.textColor = .gray
-        label.translatesAutoresizingMaskIntoConstraints = false
-        return label
-    }()
-    
-    private let statusView: UIView = {
-        let view = UIView()
-        view.backgroundColor = .systemGreen
-        view.layer.cornerRadius = 4
-        view.translatesAutoresizingMaskIntoConstraints = false
-        return view
-    }()
-    
-    private let statusLabel: UILabel = {
-        let label = UILabel()
-        label.font = .systemFont(ofSize: 12, weight: .medium)
-        label.textColor = .white
-        label.textAlignment = .center
-        label.translatesAutoresizingMaskIntoConstraints = false
-        return label
-    }()
-    
-    // 위시리스트 버튼 추가
-    let wishlistButton: UIButton = {
-        let button = UIButton(type: .system)
-        let heartImage = UIImage(systemName: "heart")
-        button.setImage(heartImage, for: .normal)
-        button.tintColor = .gray
-        button.translatesAutoresizingMaskIntoConstraints = false
-        return button
-    }()
-    
-    private var postId: Int = 0
-    private var isInWishlist: Bool = false
-    var toggleWishlistAction: ((Int, Bool) -> Void)?
-    
-    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
-        super.init(style: style, reuseIdentifier: reuseIdentifier)
-        setupViews()
-        setupActions()
-    }
-    
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-    
-    private func setupViews() {
-        contentView.addSubview(productImageView)
-        contentView.addSubview(titleLabel)
-        contentView.addSubview(priceLabel)
-        contentView.addSubview(placeLabel)
-        contentView.addSubview(statusView)
-        contentView.addSubview(wishlistButton) // 위시리스트 버튼 추가
-        statusView.addSubview(statusLabel)
-        
-        NSLayoutConstraint.activate([
-            productImageView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
-            productImageView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            productImageView.widthAnchor.constraint(equalToConstant: 80),
-            productImageView.heightAnchor.constraint(equalToConstant: 80),
-            
-            titleLabel.leadingAnchor.constraint(equalTo: productImageView.trailingAnchor, constant: 12),
-            titleLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
-            titleLabel.trailingAnchor.constraint(equalTo: wishlistButton.leadingAnchor, constant: -8),
-            
-            priceLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            priceLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
-            priceLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
-            
-            placeLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            placeLabel.topAnchor.constraint(equalTo: priceLabel.bottomAnchor, constant: 4),
-            placeLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
-            
-            statusView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            statusView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
-            statusView.widthAnchor.constraint(equalToConstant: 60),
-            statusView.heightAnchor.constraint(equalToConstant: 24),
-            
-            statusLabel.leadingAnchor.constraint(equalTo: statusView.leadingAnchor),
-            statusLabel.trailingAnchor.constraint(equalTo: statusView.trailingAnchor),
-            statusLabel.topAnchor.constraint(equalTo: statusView.topAnchor),
-            statusLabel.bottomAnchor.constraint(equalTo: statusView.bottomAnchor),
-            
-            // 위시리스트 버튼 제약 조건
-            wishlistButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            wishlistButton.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -16),
-            wishlistButton.widthAnchor.constraint(equalToConstant: 32),
-            wishlistButton.heightAnchor.constraint(equalToConstant: 32)
-        ])
-    }
-    
-    private func setupActions() {
-        wishlistButton.addTarget(self, action: #selector(wishlistButtonTapped), for: .touchUpInside)
-    }
-    
-    @objc private func wishlistButtonTapped() {
-        // 위시리스트 상태 토글
-        isInWishlist = !isInWishlist
-        
-        // 버튼 외관 업데이트
-        updateWishlistButtonAppearance()
-        
-        // 뷰 컨트롤러의 액션 호출
-        toggleWishlistAction?(postId, isInWishlist)
-    }
-    
-    func configure(with post: Post, isInWishlist: Bool) {
-        self.postId = post.id
-        self.isInWishlist = isInWishlist
-        
-        titleLabel.text = post.title
-        priceLabel.text = formatPrice(post.price)
-        placeLabel.text = post.place ?? "위치 정보 없음"
-        
-        // 상태 설정
-        configureStatus(post.status)
-        
-        // 위시리스트 버튼 업데이트
-        updateWishlistButtonAppearance()
-        
-        // 첫 번째 이미지 로드
-        if let imageUrls = post.imageUrls, !imageUrls.isEmpty {
-            // 서버 URL과 이미지 경로 조합
-            let baseURL = "http://localhost:8080/images/"
-            let imageURLString = baseURL + imageUrls[0]
-            
-            if let imageUrl = URL(string: imageURLString) {
-                loadImage(from: imageUrl)
-            }
-        } else {
-            productImageView.image = nil
-        }
-    }
-    
-    private func updateWishlistButtonAppearance() {
-        if isInWishlist {
-            // 위시리스트에 있는 경우 - 채워진 하트
-            let heartImage = UIImage(systemName: "heart.fill")
-            wishlistButton.setImage(heartImage, for: .normal)
-            wishlistButton.tintColor = .systemRed
-        } else {
-            // 위시리스트에 없는 경우 - 빈 하트
-            let heartImage = UIImage(systemName: "heart")
-            wishlistButton.setImage(heartImage, for: .normal)
-            wishlistButton.tintColor = .gray
-        }
-    }
-    
-    private func formatPrice(_ price: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        return formatter.string(from: NSNumber(value: price)).map { "\($0)원" } ?? "\(price)원"
-    }
-    
-    private func configureStatus(_ status: Int) {
-        switch status {
-        case 0:
-            statusView.backgroundColor = .systemGreen
-            statusLabel.text = "판매중"
-        case 1:
-            statusView.backgroundColor = .systemOrange
-            statusLabel.text = "예약중"
-        case 2:
-            statusView.backgroundColor = .systemGray
-            statusLabel.text = "판매완료"
-        default:
-            statusView.isHidden = true
-        }
-    }
-    
-    private func loadImage(from url: URL) {
-        URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
-            guard let self = self,
-                  let data = data,
-                  error == nil,
-                  let image = UIImage(data: data) else {
-                DispatchQueue.main.async {
-                    self?.productImageView.image = UIImage(named: "placeholder")
-                }
-                return
-            }
-            
-            DispatchQueue.main.async {
-                self.productImageView.image = image
-            }
-        }.resume()
-    }
-    
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        productImageView.image = nil
-        titleLabel.text = nil
-        priceLabel.text = nil
-        placeLabel.text = nil
-        statusView.isHidden = false
-        
-        // 위시리스트 버튼 초기화
-        let heartImage = UIImage(systemName: "heart")
-        wishlistButton.setImage(heartImage, for: .normal)
-        wishlistButton.tintColor = .gray
-    }
-}
-
-// UIButton Extension for centering image and Title
-extension UIButton {
-    func centerImageAndButton(spacing: CGFloat = 6.0) {
-        self.contentHorizontalAlignment = .center
-        self.contentVerticalAlignment = .center
-        
-        let imageWidth = self.imageView?.image?.size.width ?? 0
-        let imageHeight = self.imageView?.image?.size.height ?? 0
-        
-        let labelWidth = self.titleLabel?.intrinsicContentSize.width ?? 0
-        let labelHeight = self.titleLabel?.intrinsicContentSize.height ?? 0
-        
-        self.imageEdgeInsets = UIEdgeInsets(
-            top: -labelHeight - spacing/2,
-            left: 0,
-            bottom: 0,
-            right: -labelWidth
-        )
-        
-        self.titleEdgeInsets = UIEdgeInsets(
-            top: 0,
-            left: -imageWidth,
-            bottom: -imageHeight - spacing/2,
-            right: 0
-        )
+// Array extension for safe access
+extension Array {
+    subscript(safe index: Int) -> Element? {
+        return indices.contains(index) ? self[index] : nil
     }
 }

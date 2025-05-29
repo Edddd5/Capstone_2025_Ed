@@ -9,6 +9,9 @@
 import UIKit
 
 class CustomTabBar: UIView {
+    // 브랜드 컬러 정의
+    private let brandColor = UIColor(red: 75/255, green: 60/255, blue: 196/255, alpha: 1.0) // #4B3CC4
+    
     // 탭 버튼을 담는 컨테이너
     private let tabBarView: UIView = {
         let view = UIView()
@@ -23,9 +26,9 @@ class CustomTabBar: UIView {
         let button = UIButton()
         let config = UIImage.SymbolConfiguration(pointSize: 24)
         button.setImage(UIImage(systemName: "house.fill", withConfiguration: config), for: .normal)
-        button.tintColor = .systemBlue
+        button.tintColor = brandColor
         button.setTitle("홈", for: .normal)
-        button.setTitleColor(.systemBlue, for: .normal)
+        button.setTitleColor(brandColor, for: .normal)
         button.titleLabel?.font = .systemFont(ofSize: 13)
         button.centerImageAndButton(spacing: 8)
         return button
@@ -118,7 +121,7 @@ class CustomTabBar: UIView {
             button.setTitleColor(.gray, for: .normal)
         }
         
-        selectedButton.tintColor = .systemBlue
-        selectedButton.setTitleColor(.systemBlue, for: .normal)
+        selectedButton.tintColor = brandColor
+        selectedButton.setTitleColor(brandColor, for: .normal)
     }
 }
